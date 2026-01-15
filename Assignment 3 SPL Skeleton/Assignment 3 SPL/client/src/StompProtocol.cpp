@@ -65,8 +65,14 @@ std::vector<std::string> StompProtocol::processInput(std::string line) {
         std::string filePath;
         ss >> filePath;
         names_and_events n_e = parseEventsFile(filePath);
+        std::string gameName = n_e.team_a_name + "_" + n_e.team_b_name;
         
         for (const Event& event : n_e.events) {
+            {
+                std::lock_guard<std::mutex> lock(reportsMutex);
+                gameReports[gameName][userName].push_back(event);
+
+            }
             std::string frame = "SEND\n";
             frame += "destination:/" + n_e.team_a_name + "_" + n_e.team_b_name + "\n\n";  
             frame += "user: " + userName + "\n";  
