@@ -66,19 +66,18 @@ std::vector<std::string> StompProtocol::processInput(std::string line) {
         ss >> filePath;
         names_and_events n_e = parseEventsFile(filePath);
         std::string gameName = n_e.team_a_name + "_" + n_e.team_b_name;
-        
+
         for (const Event& event : n_e.events) {
             {
                 std::lock_guard<std::mutex> lock(reportsMutex);
                 gameReports[gameName][userName].push_back(event);
-
             }
             std::string frame = "SEND\n";
             frame += "destination:/" + n_e.team_a_name + "_" + n_e.team_b_name + "\n";  
-            frame += "user: " + userName + "\n";
+            frame += "user: " + userName + "\n";  
             frame += "\n";
 
-            frame += "user: " + userName + "\n";
+            frame += "user: " + userName + "\n";  
             frame += "team a: " + event.get_team_a_name() + "\n";
             frame += "team b: " + event.get_team_b_name() + "\n";
             frame += "event name: " + event.get_name() + "\n";  
@@ -111,8 +110,27 @@ std::vector<std::string> StompProtocol::processInput(std::string line) {
             gameReports[gameName].find(user) != gameReports[gameName].end()) {
             
             std::vector<Event> events = gameReports[gameName][user];
-            // Sort events by time
+            
+            // Halftime sorting
             std::sort(events.begin(), events.end(), [](const Event& a, const Event& b) {
+                // Lambda to extract "before halftime" flag safely
+                auto isBeforeHalftime = [](const Event& e) {
+                    const auto& updates = e.get_game_updates();
+                    auto it = updates.find("before halftime");
+                    if (it != updates.end()) {
+                        return it->second == "true";
+                    }
+                    return false; // Default to false (2nd half) if missing
+                };
+
+                bool a_bh = isBeforeHalftime(a);
+                bool b_bh = isBeforeHalftime(b);
+
+                // If they belong to different halves, First Half (true) comes first
+                if (a_bh != b_bh) {
+                    return a_bh; 
+                }
+                // If same half, sort by time
                 return a.get_time() < b.get_time();
             });
 
@@ -148,21 +166,21 @@ std::vector<std::string> StompProtocol::processInput(std::string line) {
                 outFile << key << ": " << val << "\n";
             }
 
-            // 3. Print Team A Stats (SAFE VERSION)
+            // 3. Print Team A Stats
             if (!events.empty()) {
                 outFile << events[0].get_team_a_name() << " stats:\n";
             } else {
-                outFile << "Team A stats:\n"; // Fallback if no events
+                outFile << "Team A stats:\n";
             }
             for (auto const& [key, val] : team_a_stats) {
                 outFile << key << ": " << val << "\n";
             }
 
-            // 4. Print Team B Stats (SAFE VERSION)
+            // 4. Print Team B Stats
             if (!events.empty()) {
                 outFile << events[0].get_team_b_name() << " stats:\n";
             } else {
-                 outFile << "Team B stats:\n"; // Fallback if no events
+                 outFile << "Team B stats:\n"; 
             }
             for (auto const& [key, val] : team_b_stats) {
                 outFile << key << ": " << val << "\n";
