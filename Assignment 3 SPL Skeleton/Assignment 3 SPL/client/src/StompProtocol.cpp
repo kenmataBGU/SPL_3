@@ -242,6 +242,8 @@ void StompProtocol::processServerFrame(std::string frame) {
             } else {
                 std::cout << originalCmd << std::endl; 
             }
+
+            receiptToCommand.erase(std::stoi(receiptId));
         }
     } 
     else if (command == "MESSAGE") {
