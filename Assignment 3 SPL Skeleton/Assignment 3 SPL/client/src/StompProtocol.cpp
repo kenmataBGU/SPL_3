@@ -68,23 +68,23 @@ std::vector<std::string> StompProtocol::processInput(std::string line) {
         
         for (const Event& event : n_e.events) {
             std::string frame = "SEND\n";
-            frame += "destination:/" + n_e.team_a_name + "_" + n_e.team_b_name + "\n";
-            frame += "user:" + userName + "\n\n"; 
-            
-            // The rest of the event data stays in the BODY
-            frame += "event name:" + event.get_name() + "\n";
-            frame += "time:" + std::to_string(event.get_time()) + "\n";
+            frame += "destination:/" + n_e.team_a_name + "_" + n_e.team_b_name + "\n\n";  
+            frame += "user: " + userName + "\n";  
+            frame += "team a: " + event.get_team_a_name() + "\n";
+            frame += "team b: " + event.get_team_b_name() + "\n";
+            frame += "event name: " + event.get_name() + "\n";  
+            frame += "time: " + std::to_string(event.get_time()) + "\n";  
             frame += "general game updates:\n";
             for (auto const& [key, val] : event.get_game_updates()) {
-                frame += "\t" + key + ":" + val + "\n";
+                frame += "\t" + key + ": " + val + "\n";  
             }
             frame += "team a updates:\n";
             for (auto const& [key, val] : event.get_team_a_updates()) {
-                frame += "\t" + key + ":" + val + "\n";
+                frame += "\t" + key + ": " + val + "\n";  
             }
             frame += "team b updates:\n";
             for (auto const& [key, val] : event.get_team_b_updates()) {
-                frame += "\t" + key + ":" + val + "\n";
+                frame += "\t" + key + ": " + val + "\n";  
             }
             frame += "description:\n" + event.get_discription() + "\n";
             
