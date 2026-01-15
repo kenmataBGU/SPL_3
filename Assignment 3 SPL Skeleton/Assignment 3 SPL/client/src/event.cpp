@@ -74,18 +74,18 @@ Event::Event(const std::string &frame_body) : team_a_name(""), team_b_name(""), 
         // clean unwanted char
         if (!line.empty() && line[line.length() - 1] == '\r') line.erase(line.length() - 1);
 
-        if (line.find("team a: ") == 0) team_a_name = line.substr(8);
-        else if (line.find("team b: ") == 0) team_b_name = line.substr(8);
-        else if (line.find("event name: ") == 0) name = line.substr(12);
-        else if (line.find("time: ") == 0) time = std::stoi(line.substr(6));
+        if (line.find("team a:") == 0) team_a_name = line.substr(8);
+        else if (line.find("team b:") == 0) team_b_name = line.substr(8);
+        else if (line.find("event name:") == 0) name = line.substr(12);
+        else if (line.find("time:") == 0) time = std::stoi(line.substr(6));
         else if (line.find("general game updates:") == 0) current_section = "general";
         else if (line.find("team a updates:") == 0) current_section = "team_a";
         else if (line.find("team b updates:") == 0) current_section = "team_b";
         else if (line.find("description:") == 0) current_section = "description";
-        else if (line.find("    ") == 0) { // 4 tabs
+        else if (line.find("\t") == 0) {
             size_t colonPos = line.find(":");
             if (colonPos != std::string::npos) {
-                std::string key = line.substr(4, colonPos - 4);
+                std::string key = line.substr(1, colonPos - 1);
                 std::string value = line.substr(colonPos + 2);
                 if (current_section == "general") game_updates[key] = value;
                 else if (current_section == "team_a") team_a_updates[key] = value;
