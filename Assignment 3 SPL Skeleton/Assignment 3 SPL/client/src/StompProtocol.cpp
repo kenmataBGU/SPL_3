@@ -74,8 +74,11 @@ std::vector<std::string> StompProtocol::processInput(std::string line) {
 
             }
             std::string frame = "SEND\n";
-            frame += "destination:/" + n_e.team_a_name + "_" + n_e.team_b_name + "\n\n";  
-            frame += "user: " + userName + "\n";  
+            frame += "destination:/" + n_e.team_a_name + "_" + n_e.team_b_name + "\n";  
+            frame += "user: " + userName + "\n";
+            frame += "\n";
+
+            frame += "user: " + userName + "\n";
             frame += "team a: " + event.get_team_a_name() + "\n";
             frame += "team b: " + event.get_team_b_name() + "\n";
             frame += "event name: " + event.get_name() + "\n";  
