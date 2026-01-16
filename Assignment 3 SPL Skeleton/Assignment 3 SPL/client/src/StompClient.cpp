@@ -68,9 +68,8 @@ int main(int argc, char *argv[]) {
             }
             
             // If the loop ends, it means we are logged out or disconnected.
-            // Because the main thread is stuck sleeping on 'cin', we must force exit here.
+            // Enabling re-login when pressing enter
             std::cout << "Exiting..." << std::endl;
-            exit(0);
         });
 
         while (loggedIn) {
