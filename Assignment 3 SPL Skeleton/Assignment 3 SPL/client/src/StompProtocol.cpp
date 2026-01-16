@@ -84,15 +84,15 @@ std::vector<std::string> StompProtocol::processInput(std::string line) {
             frame += "time: " + std::to_string(event.get_time()) + "\n";  
             frame += "general game updates:\n";
             for (auto const& [key, val] : event.get_game_updates()) {
-                frame += "\t" + key + ": " + val + "\n";  
+                frame += key + ": " + val + "\n";  
             }
             frame += "team a updates:\n";
             for (auto const& [key, val] : event.get_team_a_updates()) {
-                frame += "\t" + key + ": " + val + "\n";  
+                frame += key + ": " + val + "\n";  
             }
             frame += "team b updates:\n";
             for (auto const& [key, val] : event.get_team_b_updates()) {
-                frame += "\t" + key + ": " + val + "\n";  
+                frame += key + ": " + val + "\n";  
             }
             frame += "description:\n" + event.get_discription() + "\n";
             
@@ -120,7 +120,7 @@ std::vector<std::string> StompProtocol::processInput(std::string line) {
                     if (it != updates.end()) {
                         return it->second == "true";
                     }
-                    return false; // Default to false (2nd half) if missing
+                    return e.get_time() < 2700;
                 };
 
                 bool a_bh = isBeforeHalftime(a);
