@@ -11,9 +11,9 @@
 int main(int argc, char *argv[]) {
     ConnectionHandler* handler = nullptr;
     std::atomic<bool> loggedIn(false);
-    StompProtocol protocol(loggedIn); 
     
     while (true) {
+        StompProtocol protocol(loggedIn); 
         // Initial Login Phase
         while (!loggedIn) {
             std::string line;
@@ -47,6 +47,7 @@ int main(int argc, char *argv[]) {
                 
                 if (response.find("CONNECTED") != std::string::npos) {
                     loggedIn = true;
+                    protocol.setUserName(username);
                     // Seed protocol with login data
                     protocol.processInput(line);
                 } else {

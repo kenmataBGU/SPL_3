@@ -7,7 +7,7 @@
 
 StompProtocol::StompProtocol(std::atomic<bool>& loggedIn) : 
     gameReports(), userName(""), shouldContinue(loggedIn), 
-    subscriptionCounter(0), receiptCounter(0), channelToSubId(), receiptToCommand() {}
+    subscriptionCounter(0), receiptCounter(0), channelToSubId(), receiptToCommand(), reportsMutex() {}
 
 std::vector<std::string> StompProtocol::processInput(std::string line) {
     std::stringstream ss(line);

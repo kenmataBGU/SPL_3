@@ -26,4 +26,5 @@ class StompProtocol
         StompProtocol(std::atomic<bool>& loggedIn);
         std::vector<std::string> processInput(std::string line);
         void processServerFrame(std::string frame);
+        void setUserName(std::string name) { userName = name; }
 };
