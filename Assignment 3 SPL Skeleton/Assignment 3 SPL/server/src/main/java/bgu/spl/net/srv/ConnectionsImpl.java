@@ -9,8 +9,8 @@ public class ConnectionsImpl<T> implements Connections<T> {
     // ===== Fields =====
 
     private final ConcurrentHashMap<Integer, ConnectionHandler<T>> connectionHandlers; // connection IDs -> ConnectionHandlers
-    private final ConcurrentHashMap<String, Set<Integer>> channelSubscriptions; // channel names -> set of subscribed connection IDs
-    
+    private final ConcurrentHashMap<String, Set<Integer>> channelSubscriptions;        // channel names -> set of subscribed connection IDs
+
 
     // ===== Constructor =====
 
