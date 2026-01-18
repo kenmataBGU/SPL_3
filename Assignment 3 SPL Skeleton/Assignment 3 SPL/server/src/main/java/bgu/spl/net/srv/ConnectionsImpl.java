@@ -1,91 +1,128 @@
 package bgu.spl.net.srv;
 
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ConnectionsImpl<T> implements Connections<T> {
 
-    // ===== Fields =====
+    // ===== fields =====
 
-    private final ConcurrentHashMap<Integer, ConnectionHandler<T>> connectionHandlers; // connection IDs -> ConnectionHandlers
-    private final ConcurrentHashMap<String, Set<Integer>> channelSubscriptions;        // channel names -> set of subscribed connection IDs
-
-
-    // ===== Constructor =====
-
-    public ConnectionsImpl() {
-        this.connectionHandlers = new ConcurrentHashMap<>();
-        this.channelSubscriptions = new ConcurrentHashMap<>();
-    }
+    // connectionId -> handler
+    private final ConcurrentHashMap<Integer, ConnectionHandler<T>> active = new ConcurrentHashMap<>();
+    // destination -> (connectionId -> subscriptionId)
+    private final ConcurrentHashMap<String, ConcurrentHashMap<Integer, String>> destToConnSubId = new ConcurrentHashMap<>();
+    // connectionId -> (subscriptionId -> destination)
+    private final ConcurrentHashMap<Integer, ConcurrentHashMap<String, String>> connToSubIdDest = new ConcurrentHashMap<>();
 
 
-    // ===== Methods =====
-
-    /**
-     * Registers a new connection handler with the given connection ID.
-     */
-    public void register(int connectionId, ConnectionHandler<T> handler) {
-        if (handler == null)
-            throw new IllegalArgumentException("ConnectionHandler cannot be null");
-
-        ConnectionHandler<T> existing = connectionHandlers.putIfAbsent(connectionId, handler);
-
-        if (existing != null)
-            throw new IllegalArgumentException("Connection ID already registered");
-    }
+    // ===== methods =====
     
-    /**
-     * Sends a message to the client with the given connection ID.
-     */
+    public void connect(int connectionId, ConnectionHandler<T> handler) {
+        if (handler == null) 
+            throw new IllegalArgumentException("handler is null");
+        
+        active.put(connectionId, handler);
+        connToSubIdDest.putIfAbsent(connectionId, new ConcurrentHashMap<>());
+    }
+
     @Override
     public boolean send(int connectionId, T msg) {
-        ConnectionHandler<T> handler = connectionHandlers.get(connectionId);
-
-        // Clean up if the handler is missing
-        if (handler == null) {
-            disconnect(connectionId); 
+        ConnectionHandler<T> handler = active.get(connectionId);
+        if (handler == null) 
             return false;
-        }
-
-        try {
-            handler.send(msg);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
+        
+        handler.send(msg);
+        return true;
     }
 
-    /**
-     * Sends a message to all clients subscribed to the given channel.
-     */
     @Override
-    public void send(String channel, T msg) {
-        Set<Integer> subscribers = channelSubscriptions.get(channel);
-        if (subscribers != null && !subscribers.isEmpty()) {
-            for (int connectionId : subscribers) {
-                send(connectionId, msg);
-            }
-        }
+    public void send(String destination, T msg) {
+        if (destination == null) 
+            return;
+        
+        ConcurrentHashMap<Integer, String> subscribers = destToConnSubId.get(destination);
+        if (subscribers == null) 
+            return;
+
+        for (Integer connId : subscribers.keySet()) 
+            send(connId, msg);
     }
 
-    /**
-     * Disconnects the client with the given connection ID.
-     */
     @Override
     public void disconnect(int connectionId) {
-        // Remove the connection handler
-        connectionHandlers.remove(connectionId);
+        // remove handler
+        active.remove(connectionId);
 
-        // Remove the connection ID from all channel subscriptions
-        for (Map.Entry<String, Set<Integer>> entry : channelSubscriptions.entrySet()) {
-            Set<Integer> subscribers = entry.getValue();
-            subscribers.remove(connectionId);
-            // Remove the channel if no subscribers left
-            if (subscribers.isEmpty()) {
-                channelSubscriptions.remove(entry.getKey(), subscribers);
+        // remove all subscriptions of this connection
+        ConcurrentHashMap<String, String> subIdToDest = connToSubIdDest.remove(connectionId);
+        if (subIdToDest == null) 
+            return;
+
+        for (Map.Entry<String, String> e : subIdToDest.entrySet()) {
+            String destination = e.getValue();
+            ConcurrentHashMap<Integer, String> map = destToConnSubId.get(destination);
+            if (map != null) {
+                map.remove(connectionId);
+                if (map.isEmpty()) 
+                    destToConnSubId.remove(destination, map);
             }
         }
     }
 
+    public boolean subscribe(int connectionId, String destination, String subscriptionId) {
+        if (destination == null || subscriptionId == null) 
+            return false;
+
+        connToSubIdDest.putIfAbsent(connectionId, new ConcurrentHashMap<>());
+        ConcurrentHashMap<String, String> subIdToDest = connToSubIdDest.get(connectionId);
+
+        // check if subscription-id unique per connection
+        String prev = subIdToDest.putIfAbsent(subscriptionId, destination);
+        if (prev != null) 
+            return false;
+
+        destToConnSubId.putIfAbsent(destination, new ConcurrentHashMap<>());
+        destToConnSubId.get(destination).put(connectionId, subscriptionId);
+        return true;
+    }
+
+    public String unsubscribe(int connectionId, String subscriptionId) {
+        if (subscriptionId == null) 
+            return null;
+
+        ConcurrentHashMap<String, String> subIdToDest = connToSubIdDest.get(connectionId);
+        if (subIdToDest == null) 
+            return null;
+
+        String destination = subIdToDest.remove(subscriptionId);
+        if (destination == null) 
+            return null;
+
+        ConcurrentHashMap<Integer, String> map = destToConnSubId.get(destination);
+        if (map != null) {
+            map.remove(connectionId);
+            if (map.isEmpty()) 
+                destToConnSubId.remove(destination, map);
+        }
+        return destination;
+    }
+
+    public String getSubscriptionId(int connectionId, String destination) {
+        ConcurrentHashMap<Integer, String> map = destToConnSubId.get(destination);
+        if (map == null) 
+            return null;
+        return map.get(connectionId);
+    }
+
+    public boolean isConnected(int connectionId) {
+        return active.containsKey(connectionId);
+    }
+
+    public java.util.List<Integer> subscribersSnapshot(String destination) {
+        ConcurrentHashMap<Integer, String> map = destToConnSubId.get(destination);
+        if (map == null) 
+            return java.util.Collections.emptyList();
+        
+        return new java.util.ArrayList<>(map.keySet());
+    }
 }
