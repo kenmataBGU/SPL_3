@@ -117,7 +117,7 @@ public class Reactor<T> implements Server<T> {
         final NonBlockingConnectionHandler<T> handler = new NonBlockingConnectionHandler<>(reader, protocol, clientChan, this);
         
         int connectionId = connectionIdCounter.incrementAndGet(); // Generate a unique connection ID
-        connections.register(connectionId, handler); // Register the handler
+        connections.connect(connectionId, handler); // connect the handler
         protocol.start(connectionId, connections); // Start the protocol
         
         clientChan.register(selector, SelectionKey.OP_READ, handler);
