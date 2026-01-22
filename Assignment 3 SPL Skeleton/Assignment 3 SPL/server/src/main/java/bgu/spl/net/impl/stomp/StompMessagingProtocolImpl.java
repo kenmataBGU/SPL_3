@@ -2,21 +2,29 @@ package bgu.spl.net.impl.stomp;
 
 import bgu.spl.net.api.StompMessagingProtocol;
 import bgu.spl.net.srv.Connections;
-import bgu.spl.net.srv.ConnectionsImpl;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class StompMessagingProtocolImpl implements StompMessagingProtocol<String> {
 
     private static final AtomicInteger globalMessageId = new AtomicInteger(1);
+    
+    // Global Subscriptions: Topic Name -> Map<ConnectionId, SubscriptionId>
+    // We need the SubId to include it in the MESSAGE frame "subscription" header.
+    private static final ConcurrentHashMap<String, ConcurrentHashMap<Integer, String>> topicSubscribers = new ConcurrentHashMap<>();
 
     private boolean shouldTerminate = false;
     private int connectionId;
     private Connections<String> connections;
     private boolean isConnected = false;
     private String currentUsername = null;
+    
+    // Per-Client Subscriptions: SubscriptionId -> Topic Name
+    // Used to quickly find the topic when a client sends UNSUBSCRIBE id:X
+    private Map<String, String> mySubscriptions = new HashMap<>();
 
     @Override
     public void start(int connectionId, Connections<String> connections) {
@@ -25,6 +33,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         this.shouldTerminate = false;
         this.isConnected = false;
         this.currentUsername = null;
+        this.mySubscriptions.clear();
     }
 
     @Override
@@ -33,12 +42,10 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         try {
             frame = Frame.parse(message);
         } catch (Exception e) {
-            // If parsing fails, we cannot safely send an error frame as we don't know the state
             shouldTerminate = true;
             return;
         }
 
-        // Route commands
         switch (frame.command) {
             case "CONNECT":
             case "STOMP":
@@ -79,13 +86,11 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         String acceptVersion = frame.headers.get("accept-version");
         String host = frame.headers.get("host");
 
-        // Basic validation
         if (login == null || passcode == null || acceptVersion == null || host == null) {
             sendError("malformed frame", "Missing mandatory headers in CONNECT");
             return;
         }
 
-        // DATABASE: Verify User
         boolean success = DatabaseService.validateUser(login, passcode);
         if (!success) {
             sendError("login failed", "Wrong password or database error");
@@ -95,7 +100,6 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         this.isConnected = true;
         this.currentUsername = login;
 
-        // Send CONNECTED frame
         Frame connectedFrame = new Frame("CONNECTED");
         connectedFrame.headers.put("version", "1.2");
         connections.send(connectionId, connectedFrame.toString());
@@ -110,15 +114,13 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
 
-        // INTEGRATION: We must cast to ConnectionsImpl to access 'subscribe'
-        if (connections instanceof ConnectionsImpl) {
-            ((ConnectionsImpl<String>) connections).subscribe(connectionId, dest, id);
-        } else {
-            // Fallback if the server structure changes (should not happen with provided files)
-            System.err.println("Error: Connections object does not support subscriptions.");
-        }
+        // 1. Add to global topic map
+        topicSubscribers.computeIfAbsent(dest, k -> new ConcurrentHashMap<>())
+                        .put(connectionId, id);
+        
+        // 2. Add to local map (for Unsubscribe)
+        mySubscriptions.put(id, dest);
 
-        // Send RECEIPT if requested
         String receiptId = frame.headers.get("receipt");
         if (receiptId != null) {
             Frame receipt = new Frame("RECEIPT");
@@ -134,8 +136,13 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
 
-        if (connections instanceof ConnectionsImpl) {
-            ((ConnectionsImpl<String>) connections).unsubscribe(connectionId, id);
+        // Find which topic this subscription ID belongs to
+        String topic = mySubscriptions.remove(id);
+        if (topic != null) {
+            // Remove from global map
+            if (topicSubscribers.containsKey(topic)) {
+                topicSubscribers.get(topic).remove(connectionId);
+            }
         }
 
         String receiptId = frame.headers.get("receipt");
@@ -153,13 +160,12 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
 
-        // FEATURE 1: Report Generation
-        // Triggered if the body is exactly "report" (or via a specific header if you prefer)
+        // FEATURE: Report Generation
         if (frame.body != null && frame.body.trim().equals("report")) {
             String report = DatabaseService.generateReport();
             
             Frame reportMsg = new Frame("MESSAGE");
-            reportMsg.headers.put("subscription", "0"); // Dummy ID for direct message
+            reportMsg.headers.put("subscription", "0"); // Direct message
             reportMsg.headers.put("destination", dest);
             reportMsg.headers.put("message-id", String.valueOf(globalMessageId.getAndIncrement()));
             reportMsg.body = report;
@@ -168,28 +174,42 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
 
-        // FEATURE 2: File Upload Tracking
-        // The assignment requires logging filenames. The client must send a "file-name" header.
+        // FEATURE: File Upload Tracking
         String filename = frame.headers.get("file-name");
         if (filename != null) {
             DatabaseService.addFile(currentUsername, filename);
         }
 
-        // FEATURE 3: Broadcast
-        Frame msgFrame = new Frame("MESSAGE");
-        msgFrame.headers.put("subscription", "0"); // In full impl, map to subscriber's actual ID
-        msgFrame.headers.put("message-id", String.valueOf(globalMessageId.getAndIncrement()));
-        msgFrame.headers.put("destination", dest);
-        msgFrame.body = frame.body;
+        // BROADCAST LOGIC (FIXED)
+        ConcurrentHashMap<Integer, String> subscribers = topicSubscribers.get(dest);
+        if (subscribers != null) {
+            for (Map.Entry<Integer, String> entry : subscribers.entrySet()) {
+                Integer targetConnId = entry.getKey();
+                String subId = entry.getValue();
 
-        connections.send(dest, msgFrame.toString());
+                Frame msgFrame = new Frame("MESSAGE");
+                msgFrame.headers.put("subscription", subId); // Must match recipient's sub ID
+                msgFrame.headers.put("message-id", String.valueOf(globalMessageId.getAndIncrement()));
+                msgFrame.headers.put("destination", dest);
+                msgFrame.body = frame.body;
+
+                connections.send(targetConnId, msgFrame.toString());
+            }
+        }
     }
 
     private void handleDisconnect(Frame frame) {
-        // DATABASE: Update logout time
         if (currentUsername != null) {
             DatabaseService.logoutUser(currentUsername);
         }
+
+        // Remove all subscriptions for this user
+        for (String topic : mySubscriptions.values()) {
+            if (topicSubscribers.containsKey(topic)) {
+                topicSubscribers.get(topic).remove(connectionId);
+            }
+        }
+        mySubscriptions.clear();
 
         String receiptId = frame.headers.get("receipt");
         if (receiptId != null) {
@@ -219,7 +239,6 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         error.body = "The message:\n-----\n" + description + "\n-----";
         connections.send(connectionId, error.toString());
         
-        // Ensure DB logout even on error
         if (currentUsername != null) {
             DatabaseService.logoutUser(currentUsername);
         }
@@ -236,7 +255,6 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         Frame(String command) { this.command = command; }
 
         static Frame parse(String msg) {
-            // STOMP frames end with \0. Remove it for parsing.
             int nullIdx = msg.indexOf('\0');
             String effectiveMsg = (nullIdx >= 0) ? msg.substring(0, nullIdx) : msg;
             
@@ -267,7 +285,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             }
             sb.append('\n');
             if (body != null) sb.append(body);
-            sb.append('\0'); // Important: Re-add null terminator
+            sb.append('\0'); // Important: The protocol adds the terminator
             return sb.toString();
         }
     }

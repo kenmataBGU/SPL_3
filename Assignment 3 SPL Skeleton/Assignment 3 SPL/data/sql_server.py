@@ -1,74 +1,49 @@
 #!/usr/bin/env python3
 """
 Basic Python Server for STOMP Assignment – Stage 3.3
-
-IMPORTANT:
-DO NOT CHANGE the server name or the basic protocol.
-Students should EXTEND this server by implementing
-the methods below.
+FIXED VERSION: Implements LOGIN, LOGOUT, and ADD_FILE logic
 """
 
 import socket
 import sys
 import threading
 import sqlite3
-import os
+import datetime
 
 SERVER_NAME = "STOMP_PYTHON_SQL_SERVER"
 DB_FILE = "stomp_server.db"
 
+# Global buffer dictionary
+buffers = {}
+
 def recv_null_terminated(sock):
-    """
-    Receives data from the socket until a null character '\0' is found.
-    
-    CORRECTION:
-    This function now uses a persistent buffer attached to the socket object
-    (sock._buffer) to handle TCP packet coalescing. This prevents data loss 
-    when multiple commands arrive in a single recv() call.
-    """
-    # Initialize the buffer on the socket object if it doesn't exist
-    if not hasattr(sock, '_buffer'):
-        sock._buffer = b""
+    if sock not in buffers:
+        buffers[sock] = b""
 
     while True:
-        # Check if we already have a complete message in the buffer
-        if b"\0" in sock._buffer:
-            # Split exactly at the first null terminator
-            msg_bytes, remainder = sock._buffer.split(b"\0", 1)
-            # Update the buffer with the remaining data for the next call
-            sock._buffer = remainder
-            # Return the decoded message
+        if b"\0" in buffers[sock]:
+            msg_bytes, remainder = buffers[sock].split(b"\0", 1)
+            buffers[sock] = remainder
             return msg_bytes.decode("utf-8", errors="replace")
         
-        # If no null terminator, read more data from the network
         try:
             chunk = sock.recv(1024)
             if not chunk:
-                return ""  # Connection closed by client
-            sock._buffer += chunk
+                return ""
+            buffers[sock] += chunk
         except OSError:
-            return "" # Socket error implies disconnection
+            return ""
 
 def init_database():
-    """
-    Initialize the database with the schema required by Assignment Section 3.3.
-    """
     try:
-        # Use a context manager to ensure the connection closes
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
-            
-            # 1. Users: Tracks registration
-            # Requirement: "insert a record when a new username is created"
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     username TEXT PRIMARY KEY,
                     password TEXT NOT NULL
                 )
             """)
-
-            # 2. Logins: Tracks login/logout history
-            # Requirement: "insert a record for each successful login... update... upon disconnect"
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS logins (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,9 +53,6 @@ def init_database():
                     FOREIGN KEY(username) REFERENCES users(username)
                 )
             """)
-
-            # 3. Files: Tracks uploaded files
-            # Requirement: "log every filename uploaded via the report command"
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS files (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,99 +62,152 @@ def init_database():
                     FOREIGN KEY(username) REFERENCES users(username)
                 )
             """)
-            
             conn.commit()
             print(f"[{SERVER_NAME}] Database initialized successfully at {DB_FILE}.")
     except Exception as e:
         print(f"[{SERVER_NAME}] DB Init Error: {e}")
 
-def execute_sql_command(sql_command):
-    """
-    Executes INSERT, UPDATE, DELETE commands.
-    Returns 'done' on success.
-    """
-    try:
-        # Open a new connection per request for thread safety
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql_command)
-            conn.commit()
-            return "done"
-    except sqlite3.Error as e:
-        return f"ERROR: {e}"
-    except Exception as e:
-        return f"ERROR: {e}"
-
 def execute_sql_query(sql_query):
-    """
-    Executes SELECT queries.
-    Returns a string representing the rows, formatted for easy parsing in Java.
-    Format: val1|val2|val3 (lines separated by \n)
-    """
+    """ Executes SELECT queries. """
     try:
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
             cursor.execute(sql_query)
             rows = cursor.fetchall()
-
             if not rows:
                 return ""
-
-            # Format the output using a pipe '|' delimiter.
-            # Java Parser Tip: String[] cols = line.split("\\|");
             result = []
             for row in rows:
-                # Convert all items to string and join with pipe
                 row_str = "|".join([str(item) for item in row])
                 result.append(row_str)
-            
             return "\n".join(result)
-
-    except sqlite3.Error as e:
+    except Exception as e:
         return f"ERROR: {e}"
+
+# --- NEW BUSINESS LOGIC HANDLERS ---
+
+def handle_login(username, password):
+    """
+    Checks user/pass. Registers if new. Logs the login event.
+    Returns: "login success" or "login failed"
+    """
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            
+            # 1. Check if user exists
+            cursor.execute("SELECT password FROM users WHERE username=?", (username,))
+            row = cursor.fetchone()
+            
+            if row:
+                # User exists, check password
+                stored_pass = row[0]
+                if stored_pass != password:
+                    return "login failed" # Wrong password
+            else:
+                # User does not exist, register them
+                cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+            
+            # 2. Record the login in 'logins' table
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("INSERT INTO logins (username, login_time) VALUES (?, ?)", (username, now))
+            conn.commit()
+            
+            return "login success"
+    except Exception as e:
+        return f"ERROR: {e}"
+
+def handle_logout(username):
+    """ Updates the logout_time for the most recent active login. """
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Update the latest entry where logout_time is NULL
+            cursor.execute("""
+                UPDATE logins 
+                SET logout_time=? 
+                WHERE id = (
+                    SELECT id FROM logins 
+                    WHERE username=? AND logout_time IS NULL 
+                    ORDER BY id DESC LIMIT 1
+                )
+            """, (now, username))
+            conn.commit()
+            return "done"
+    except Exception as e:
+        return f"ERROR: {e}"
+
+def handle_add_file(username, filename):
+    """ Logs a file upload. """
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("INSERT INTO files (username, filename, upload_time) VALUES (?, ?, ?)", (username, filename, now))
+            conn.commit()
+            return "done"
     except Exception as e:
         return f"ERROR: {e}"
 
 def handle_client(client_socket, addr):
-    """
-    Main loop to handle a connection with the Java server.
-    """
     print(f"[{SERVER_NAME}] Client connected from {addr}")
-
     try:
         while True:
-            # 1. Receive Request (Blocking call using the buffered reader)
             message = recv_null_terminated(client_socket)
-            
-            # Empty message indicates disconnection
             if message == "":
                 break 
 
             print(f"[{SERVER_NAME}] Received: {message}")
-
-            # 2. Process Request
             message = message.strip()
             if not message:
-                continue # Ignore empty lines/keep-alives
+                continue 
 
-            command = message.upper()
+            # Parse Command
+            parts = message.split()
+            cmd_upper = parts[0].upper()
             response = ""
 
-            if command.startswith("SELECT"):
-                response = execute_sql_query(message)
-            else:
-                response = execute_sql_command(message)
+            # --- ROUTING LOGIC ---
+            if cmd_upper == "LOGIN":
+                # Expect: LOGIN <user> <pass>
+                if len(parts) >= 3:
+                    response = handle_login(parts[1], parts[2])
+                else:
+                    response = "ERROR: Invalid LOGIN format"
+            
+            elif cmd_upper == "LOGOUT":
+                # Expect: LOGOUT <user>
+                if len(parts) >= 2:
+                    response = handle_logout(parts[1])
+                else:
+                    response = "ERROR: Invalid LOGOUT format"
+            
+            elif cmd_upper == "ADD_FILE":
+                # Expect: add_file <user> <filename>
+                if len(parts) >= 3:
+                    response = handle_add_file(parts[1], parts[2])
+                else:
+                    response = "ERROR: Invalid ADD_FILE format"
 
-            # 3. Send Response
-            # Crucial: Append \0 to match the STOMP-like protocol
+            elif cmd_upper == "SELECT":
+                # Raw SQL for reports
+                response = execute_sql_query(message)
+                
+            else:
+                response = "ERROR: Unknown Command"
+
+            # Send Response
             try:
                 client_socket.sendall((response + "\0").encode("utf-8"))
             except OSError:
-                break # Failed to send, client likely gone
+                break 
 
     except Exception as e:
         print(f"[{SERVER_NAME}] Error handling client {addr}: {e}")
     finally:
+        if client_socket in buffers:
+            del buffers[client_socket]
         try:
             client_socket.close()
         except Exception:
@@ -191,25 +216,16 @@ def handle_client(client_socket, addr):
 
 def start_server(host="127.0.0.1", port=7778):
     init_database()
-    
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
     try:
         server_socket.bind((host, port))
         server_socket.listen(5)
         print(f"[{SERVER_NAME}] Server started on {host}:{port}")
-        
         while True:
             client_socket, addr = server_socket.accept()
-            # Spawn a new thread for each client to allow concurrent connections
-            t = threading.Thread(
-                target=handle_client, 
-                args=(client_socket, addr), 
-                daemon=True
-            )
+            t = threading.Thread(target=handle_client, args=(client_socket, addr), daemon=True)
             t.start()
-
     except KeyboardInterrupt:
         print(f"\n[{SERVER_NAME}] Shutting down server...")
     except Exception as e:

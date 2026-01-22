@@ -22,8 +22,9 @@ public class StompMessageEncoderDecoder implements MessageEncoderDecoder<String>
 
     @Override
     public byte[] encode(String message) {
-        // We must append the null terminator when sending back to client
-        return (message + "\0").getBytes(StandardCharsets.UTF_8);
+        // FIX: Do NOT append "\0" here. 
+        // The Protocol's Frame.toString() already appends the null terminator.
+        return message.getBytes(StandardCharsets.UTF_8);
     }
 
     private void pushByte(byte nextByte) {
